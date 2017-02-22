@@ -37,6 +37,10 @@ public class TransformerHandler implements RequestHandler<S3Event, String> {
 	private final String TXT_TYPE = (String) "txt";
 
     public String handleRequest(S3Event s3event, Context context) {
+    	final File tmpFile = new File("/tmp");
+		System.out.println("Files in /tmp fold: ");
+		printDirectory(tmpFile);
+		
 		final long TIME = System.currentTimeMillis();
 		LambdaLogger _log = context.getLogger();
 
@@ -73,23 +77,19 @@ public class TransformerHandler implements RequestHandler<S3Event, String> {
 		AmazonS3 s3Client = AmazonS3ClientBuilder.standard().build();
 		S3ObjectInputStream s3Stream = s3Client.getObject(new GetObjectRequest(srcBucket, srcDataKey)).getObjectContent();
 		
-		String inputFilePath = "/tmp/" + TIME + "google_transit.zip";
+		File inputFile = new File("/tmp/" + TIME + "google_transit.zip");
+		Path inputFilePath = inputFile.toPath();
 		try {
-			Files.copy(s3Stream, new File(inputFilePath).toPath());
+			Files.copy(s3Stream, inputFilePath);
+			s3Stream.close();
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
 		
 	    List<File> paths = new ArrayList<File>();
-	    paths.add(new File(inputFilePath));
+	    paths.add(inputFile);
 		
-	    try {
-			s3Stream.close();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-
-		// Download the command txt file from S3 into a stream
+	    // Download the command txt file from S3 into a stream
 		String srcCommandKey = srcDataKey + ".transform.txt";
 		
 		S3Object s3CommandObject = s3Client.getObject(new GetObjectRequest(srcBucket, srcCommandKey));
@@ -97,22 +97,11 @@ public class TransformerHandler implements RequestHandler<S3Event, String> {
 		
 		
 	    File commandFile = new File("/tmp/transform.txt" + TIME);
+	    Path commandFilePath = commandFile.toPath();
 
-		FileOutputStream os;
 		try {
-			os = new FileOutputStream(commandFile);
-			
-			byte[] buffer = new byte[4096];
-			int bytesRead;
-			// read from is to buffer
-			while ((bytesRead = is.read(buffer)) != -1) {
-				os.write(buffer, 0, bytesRead);
-			}
+			Files.copy(is, commandFilePath);
 			is.close();
-			// flush OutputStream to write any buffered data to  file
-			os.flush();
-			os.close();
-			
 		} catch (FileNotFoundException e) {
 			e.printStackTrace();
 		} catch (IOException e) {
@@ -135,14 +124,14 @@ public class TransformerHandler implements RequestHandler<S3Event, String> {
 	    transformer.setGtfsInputDirectories(paths);
 
 	    String outputFilePath = "/tmp/transformedFile" + TIME;
-		File file = new File(outputFilePath);
-	    transformer.setOutputDirectory(file);
+	    transformer.setOutputDirectory(new File(outputFilePath));
 	    _log.log("output path: " + outputFilePath);
 
         try {
         	_log.log("Call GtfsTransformerLibrary : " +commandFile.getAbsolutePath().toString());
 			GtfsTransformerLibrary.configureTransformation(transformer, commandFile.getAbsolutePath().toString());
 			transformer.run();
+			inputFile.delete();
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
@@ -152,19 +141,16 @@ public class TransformerHandler implements RequestHandler<S3Event, String> {
 		try{
 	        Path path = Paths.get(outputFilePath);
 			if (Files.isDirectory(path)) {
-				_log.log("transformed directory is generated..........");
+				_log.log("transformed directory was generated..........");
 				pack(outputFilePath, packPath);
 			} else {
-				_log.log("GTFS transformation is failed ..........");
+				_log.log("GTFS transformation has failed ..........");
 			}
 		} catch(IOException e){
 			e.printStackTrace();
 		}
 		
-		// Uploading to S3 destination bucket
-		_log.log("Uploading to S3 destination bucket............");
-
-		_log.log("upload file is : " + packPath);
+		_log.log("uploading file : " + packPath);
 		File uploadFile = new File(packPath);
 		s3Client.putObject(new PutObjectRequest(dstBucket, srcDataKey, uploadFile));
 		
@@ -175,7 +161,7 @@ public class TransformerHandler implements RequestHandler<S3Event, String> {
 		}
 		
 		// delete temporary files
-		File tmpFile = new File("/tmp");
+		
 		deleteFile(tmpFile);
 		deleteEmptyDirectory(tmpFile);
 		
@@ -190,6 +176,7 @@ public class TransformerHandler implements RequestHandler<S3Event, String> {
 	public void pack(String sourceDirPath, String zipFilePath) throws IOException {
 	    Path p = Files.createFile(Paths.get(zipFilePath));
 	    try (ZipOutputStream zs = new ZipOutputStream(Files.newOutputStream(p))) {
+	    	zs.setLevel(9);
 	        Path pp = Paths.get(sourceDirPath);
 	        Files.walk(pp)
 	          .filter(path -> !Files.isDirectory(path))
@@ -199,6 +186,7 @@ public class TransformerHandler implements RequestHandler<S3Event, String> {
 	                  zs.putNextEntry(zipEntry);
 	                  zs.write(Files.readAllBytes(path));
 	                  zs.closeEntry();
+	                  pp.relativize(path).toFile().delete();
 	              } catch (Exception e) {
 	            	  System.err.println(e);
 	              }
