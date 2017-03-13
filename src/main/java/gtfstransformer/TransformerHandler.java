@@ -33,14 +33,11 @@ import com.amazonaws.services.s3.model.S3ObjectInputStream;
 
 public class TransformerHandler implements RequestHandler<S3Event, String> {
 	
-	private final String ZIP_TYPE = (String) "zip";
-	private final String TXT_TYPE = (String) "txt";
+	private final String ZIP_TYPE = "zip";
+	private final String TXT_TYPE = "txt";
 
     public String handleRequest(S3Event s3event, Context context) {
     	final File tmpFile = new File("/tmp");
-		System.out.println("Files in /tmp fold: ");
-		printDirectory(tmpFile);
-		
 		final long TIME = System.currentTimeMillis();
 		LambdaLogger _log = context.getLogger();
 
@@ -102,11 +99,10 @@ public class TransformerHandler implements RequestHandler<S3Event, String> {
 		try {
 			Files.copy(is, commandFilePath);
 			is.close();
-		} catch (FileNotFoundException e) {
+		} catch (Exception e) {
+			_log.log("could not download transform " + srcCommandKey);
 			e.printStackTrace();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}		
+		} 
 
 		// Infer the command file type.
 		Matcher commandMatcher = Pattern.compile(".*\\.([^\\.]*)").matcher(srcCommandKey);
@@ -123,7 +119,7 @@ public class TransformerHandler implements RequestHandler<S3Event, String> {
 	    GtfsTransformer transformer = new GtfsTransformer();
 	    transformer.setGtfsInputDirectories(paths);
 
-	    String outputFilePath = "/tmp/transformedFile" + TIME;
+	    String outputFilePath = "/tmp/transformedFile" + TIME +".zip";
 	    transformer.setOutputDirectory(new File(outputFilePath));
 	    _log.log("output path: " + outputFilePath);
 
@@ -136,22 +132,7 @@ public class TransformerHandler implements RequestHandler<S3Event, String> {
 			e.printStackTrace();
 		}
         
-		String packPath = "/tmp/" + srcDataKey + TIME;
-
-		try{
-	        Path path = Paths.get(outputFilePath);
-			if (Files.isDirectory(path)) {
-				_log.log("transformed directory was generated..........");
-				pack(outputFilePath, packPath);
-			} else {
-				_log.log("GTFS transformation has failed ..........");
-			}
-		} catch(IOException e){
-			e.printStackTrace();
-		}
-		
-		_log.log("uploading file : " + packPath);
-		File uploadFile = new File(packPath);
+		File uploadFile = new File(outputFilePath);
 		s3Client.putObject(new PutObjectRequest(dstBucket, srcDataKey, uploadFile));
 		
 		try {
@@ -164,35 +145,9 @@ public class TransformerHandler implements RequestHandler<S3Event, String> {
 		
 		deleteFile(tmpFile);
 		deleteEmptyDirectory(tmpFile);
-		
-		System.out.println("----------------------------------------------------");
-		System.out.println("Files in /tmp fold: ");
-		printDirectory(tmpFile);
-		System.out.println("----------------------------------------------------");
-		
+				
         return "Done";		
     }
-      
-	public void pack(String sourceDirPath, String zipFilePath) throws IOException {
-	    Path p = Files.createFile(Paths.get(zipFilePath));
-	    try (ZipOutputStream zs = new ZipOutputStream(Files.newOutputStream(p))) {
-	    	zs.setLevel(9);
-	        Path pp = Paths.get(sourceDirPath);
-	        Files.walk(pp)
-	          .filter(path -> !Files.isDirectory(path))
-	          .forEach(path -> {
-	              ZipEntry zipEntry = new ZipEntry(pp.relativize(path).toString());
-	              try {
-	                  zs.putNextEntry(zipEntry);
-	                  zs.write(Files.readAllBytes(path));
-	                  zs.closeEntry();
-	                  pp.relativize(path).toFile().delete();
-	              } catch (Exception e) {
-	            	  System.err.println(e);
-	              }
-	          });
-	    }
-	}
 	
     public void printDirectory(File file) {  
         File[] childFiles = file.listFiles();  
